@@ -41,12 +41,14 @@ so the outputs of one step are the inputs of the next.
   L1C `MSK_CLASSI` layer (writes NaN), and optionally reports
   NDWI-in-lakes statistics against the Zhang et al. (2022) reference
   polygons.
-- **`extractSmallLakes.py`** &mdash; Thresholds each NDWI raster, does
-  8-connected component labelling, filters components by size
-  (default `[0.01, 2.0] km²`) and by mean terrain slope from the
-  Copernicus DEM (default `< 10°`), polygonises the survivors, and writes
-  per-scene GeoPackages plus a combined `all_small_lakes.gpkg` in
-  EPSG:4326.
+- **`extractSmallLakes.py`** &mdash; Prompts for the lower and upper
+  lake-area bounds (km²) and the maximum mean terrain slope (degrees),
+  then thresholds each NDWI raster, does 8-connected component
+  labelling, filters components by that area window and by mean slope
+  computed from the Copernicus DEM, polygonises the survivors, and
+  writes per-scene GeoPackages plus a combined `all_small_lakes.gpkg`
+  in EPSG:4326. Defaults are `[0.001, 2.0] km²` and `< 20°`; press
+  Enter at any prompt to keep the default.
 - **`PGDL.py`** &mdash; Restricts the RGI glacier inventory, the Zhang
   reference lakes, and the computed lakes to a chosen state polygon, and
   further filters the computed lakes to those within 10 km of any
@@ -89,23 +91,34 @@ LakeMapping/
 │   ├── extractSmallLakes.py
 │   ├── PGDL.py
 │   ├── requirements.txt
-│   └── README.md
-├── Data/
+│   ├── README.md
+│   └── data/                    (bundled reference shapefiles, in-repo)
+│       ├── Zhang2022_Data/GL/Himalayan_Glacial_Lakes_2020.shp
+│       └── gadm/gadm41_IND_1.shp    (GADM level-1 admin boundaries)
+├── Data/                        (populated by the pipeline; user-owned)
 │   ├── Sentinel/<AOI>/*.zip     (populated by downloadSentinel2.py)
 │   ├── Sentinel/TCI/*.tif       (populated by trueColour.py)
 │   ├── Sentinel/NDWI/*.tif      (populated by cloudMaskNDWI.py)
 │   ├── DEM/*.tif                (populated by downloadDEM.py)
-│   ├── Lakes/*.gpkg             (populated by extractSmallLakes.py)
-│   ├── gadm41_IND_shp/          (GADM level-1 admin boundaries)
-│   └── Zhang2022_Data/GL/Himalayan_Glacial_Lakes_2020.shp
+│   └── Lakes/*.gpkg             (populated by extractSmallLakes.py)
 ├── GlacierInventory/
 │   └── 14_rgi60_SouthAsiaWest_India.shp
 └── Himachal_Pradesh_lakes/      (populated by PGDL.py)
 ```
 
-The `Data/`, `GlacierInventory/` and `Himachal_Pradesh_lakes/` folders
-are intentionally **not** part of this repository &mdash; they are
-supplied by the user or produced by the pipeline.
+The Zhang 2022 glacial-lake inventory and the GADM state boundaries are
+bundled inside `script/data/` for convenience. The `Data/`,
+`GlacierInventory/` and `Himachal_Pradesh_lakes/` folders sitting
+alongside `script/` are intentionally **not** part of this repository
+&mdash; they are supplied by the user (RGI glaciers, downloaded
+imagery) or produced by the pipeline.
+
+> **Note.** The scripts currently read the reference shapefiles from
+> `../Data/Zhang2022_Data/GL/...` and the GADM shapefile from a similar
+> `../Data/gadm.../` location. If you cloned this repo fresh and want to
+> use the bundled copies in `script/data/`, either update the
+> `LAKES_SHP` / `GADM_SHP` paths in `cloudMaskNDWI.py` and `PGDL.py`, or
+> symlink the folders into `../Data/` alongside the pipeline outputs.
 
 ### Reference data sources
 
@@ -122,10 +135,20 @@ Run the scripts in order from the `script/` folder. Every step is
 idempotent &mdash; already-downloaded scenes, generated NDWI/TCI rasters,
 and extracted lakes are detected on disk and skipped.
 
+Two of the scripts are interactive:
+
+- `downloadSentinel2.py` prompts for an AOI name (used as the sub-folder
+  under `../Data/Sentinel/`), the upper-left and lower-right
+  longitude/latitude of the bounding box, and your Copernicus Data
+  Space username + password.
+- `extractSmallLakes.py` prompts for the minimum and maximum lake area
+  (km²) and the maximum mean slope (degrees). Press Enter at any prompt
+  to accept the shown default.
+
 ```bash
 cd script/
 
-# 1. Download Sentinel-2 tiles for your AOI
+# 1. Download Sentinel-2 tiles for your AOI  (interactive)
 python downloadSentinel2.py
 
 # 2. Download the matching Copernicus DEM tiles
@@ -137,7 +160,7 @@ python trueColour.py
 # 4. Compute cloud-masked NDWI rasters
 python cloudMaskNDWI.py
 
-# 5. Extract small lakes (with slope filter)
+# 5. Extract small lakes (with slope filter)  (interactive)
 python extractSmallLakes.py
 
 # 6. Compare to the reference glacier + lake inventories
@@ -149,12 +172,15 @@ python PGDL.py
 Each script keeps its knobs in a short config block near the top:
 
 - `downloadSentinel2.py`: `START_DATE`, `END_DATE`, `MAX_CLOUD_COVER`,
-  `CLOUD_WARN_PCT`.
+  `CLOUD_WARN_PCT`. (Bounding box, AOI name and credentials are asked
+  for at runtime.)
 - `cloudMaskNDWI.py`: `LAKES_SHP` (Zhang polygons used for the
   NDWI-in-lakes statistics).
-- `extractSmallLakes.py`: `NDWI_THRESHOLD` (default 0.20),
-  `MIN_LAKE_AREA_KM2` / `MAX_LAKE_AREA_KM2` (default 0.01 &ndash; 2.0 km²)
-  and `SLOPE_MAX_DEG` (default 10°).
+- `extractSmallLakes.py`: `NDWI_THRESHOLD` (default 0.20). The area
+  window and slope cap are asked for at runtime with defaults
+  `DEFAULT_MIN_LAKE_AREA_KM2` = 0.001 km², `DEFAULT_MAX_LAKE_AREA_KM2`
+  = 2.0 km² and `DEFAULT_SLOPE_MAX_DEG` = 20°; edit those constants to
+  change what pressing Enter accepts.
 - `trueColour.py`: `REF_MIN`, `REF_MAX`, `GAMMA` for the display stretch.
 
 ## Credits
