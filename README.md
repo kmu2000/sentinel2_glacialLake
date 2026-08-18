@@ -18,7 +18,7 @@ so the outputs of one step are the inputs of the next.
 |-----:|-----------------------|-------------------------------------|----------------------------------------------|
 | 1    | `downloadSentinel2.py`| CDSE catalogue                      | `../Data/Sentinel/<AOI>/*.zip`               |
 | 2    | `downloadDEM.py`      | AWS Copernicus DEM open data        | `../Data/DEM/*.tif`                          |
-| 3    | `trueColour.py`       | `../Data/Sentinel/**/*.zip`         | `../Data/Sentinel/TCI/*.tif`                 |
+| 3    | `trueColour.py`       | `../Data/Sentinel/**/*.zip`         | `../Data/Sentinel/TCI/<state>/*.tif`         |
 | 4    | `cloudMaskNDWI.py`    | `../Data/Sentinel/**/*.zip`         | `../Data/Sentinel/NDWI/*.tif`                |
 | 5    | `extractSmallLakes.py`| `../Data/Sentinel/NDWI/`, `../Data/DEM/` | `../Data/Lakes/*.gpkg`, `all_small_lakes.gpkg` |
 | 6    | `PGDL.py`             | glacier + reference-lake shapefiles, `../Data/Lakes/all_small_lakes.gpkg` | `../Himachal_Pradesh_lakes/*.gpkg` |
@@ -34,8 +34,11 @@ so the outputs of one step are the inputs of the next.
   `../Data/Sentinel/<AOI>/`.
 - **`downloadDEM.py`** &mdash; Downloads 30 m Copernicus DEM (GLO-30) tiles
   covering the AOI from the AWS Open Data mirror into `../Data/DEM/`.
-- **`trueColour.py`** &mdash; Builds a stretched 8-bit RGB GeoTIFF
-  (B04/B03/B02) per scene into `../Data/Sentinel/TCI/`.
+- **`trueColour.py`** &mdash; Prompts for the state / AOI name, then
+  builds a stretched 8-bit RGB GeoTIFF (B04/B03/B02) per scene into
+  `../Data/Sentinel/TCI/<state>/`. Scenes are discovered recursively
+  under `../Data/Sentinel/`, so both the legacy flat layout and the AOI
+  sub-folders created by `downloadSentinel2.py` are picked up.
 - **`cloudMaskNDWI.py`** &mdash; Reads B03 (Green) and B08 (NIR) from each
   L1C zip, computes McFeeters NDWI, masks cloud + cirrus pixels using the
   L1C `MSK_CLASSI` layer (writes NaN), and optionally reports
@@ -97,7 +100,7 @@ LakeMapping/
 │       └── gadm/gadm41_IND_1.shp    (GADM level-1 admin boundaries)
 ├── Data/                        (populated by the pipeline; user-owned)
 │   ├── Sentinel/<AOI>/*.zip     (populated by downloadSentinel2.py)
-│   ├── Sentinel/TCI/*.tif       (populated by trueColour.py)
+│   ├── Sentinel/TCI/<state>/*.tif  (populated by trueColour.py)
 │   ├── Sentinel/NDWI/*.tif      (populated by cloudMaskNDWI.py)
 │   ├── DEM/*.tif                (populated by downloadDEM.py)
 │   └── Lakes/*.gpkg             (populated by extractSmallLakes.py)
@@ -135,12 +138,14 @@ Run the scripts in order from the `script/` folder. Every step is
 idempotent &mdash; already-downloaded scenes, generated NDWI/TCI rasters,
 and extracted lakes are detected on disk and skipped.
 
-Two of the scripts are interactive:
+Three of the scripts are interactive:
 
 - `downloadSentinel2.py` prompts for an AOI name (used as the sub-folder
   under `../Data/Sentinel/`), the upper-left and lower-right
   longitude/latitude of the bounding box, and your Copernicus Data
   Space username + password.
+- `trueColour.py` prompts for a state / AOI name and writes the RGB
+  GeoTIFFs into `../Data/Sentinel/TCI/<state>/`.
 - `extractSmallLakes.py` prompts for the minimum and maximum lake area
   (km²) and the maximum mean slope (degrees). Press Enter at any prompt
   to accept the shown default.
@@ -154,7 +159,7 @@ python downloadSentinel2.py
 # 2. Download the matching Copernicus DEM tiles
 python downloadDEM.py
 
-# 3. (Optional) build RGB composites for visual QC
+# 3. (Optional) build RGB composites for visual QC  (interactive)
 python trueColour.py
 
 # 4. Compute cloud-masked NDWI rasters
@@ -182,6 +187,7 @@ Each script keeps its knobs in a short config block near the top:
   = 2.0 km² and `DEFAULT_SLOPE_MAX_DEG` = 20°; edit those constants to
   change what pressing Enter accepts.
 - `trueColour.py`: `REF_MIN`, `REF_MAX`, `GAMMA` for the display stretch.
+  (The state / AOI sub-folder is asked for at runtime.)
 
 ## Credits
 

@@ -1,5 +1,9 @@
 """Generate a true-colour RGB GeoTIFF for every Sentinel-2 L1C scene
-in ``Data/Sentinel/``.
+below ``Data/Sentinel/``.
+
+At start-up the script prompts for the state / AOI name; the resulting
+TCI GeoTIFFs are written into ``Data/Sentinel/TCI/<state>/`` (the state
+name is sanitised so it is always a safe folder name).
 
 For each ``S2X_MSIL1C_*.zip`` archive the script:
 
@@ -19,7 +23,7 @@ For each ``S2X_MSIL1C_*.zip`` archive the script:
 
 Outputs
 -------
-* ``Data/Sentinel/TCI/DD-MM-YYYY_<TILE>_TCI.tif``
+* ``Data/Sentinel/TCI/<state>/DD-MM-YYYY_<TILE>_TCI.tif``
 
 Requirements::
 
@@ -45,7 +49,10 @@ from tqdm import tqdm
 # Configuration
 # ---------------------------------------------------------------------------
 INPUT_DIR = Path("../Data/Sentinel")
-OUTPUT_DIR = INPUT_DIR / "TCI"
+# TCI GeoTIFFs are written under ``TCI_PARENT_DIR / <state>/`` where
+# ``<state>`` is the sanitised name entered at start-up (see
+# ``prompt_state_folder`` below).
+TCI_PARENT_DIR = INPUT_DIR / "TCI"
 
 RED_BAND = "B04"
 GREEN_BAND = "B03"
@@ -243,24 +250,58 @@ def process_scene(zip_path: Path, output_dir: Path) -> Path | None:
 
 
 # ---------------------------------------------------------------------------
+# Interactive prompt
+# ---------------------------------------------------------------------------
+def prompt_state_folder(parent: Path) -> tuple[str, Path]:
+    """Prompt for the state / AOI name; return ``(display_name, output_dir)``.
+
+    ``display_name`` is the raw user input (used in printed messages).
+    ``output_dir`` is ``parent / <sanitised name>`` where the name is
+    sanitised to keep only ``[A-Za-z0-9_-]`` characters so it is always
+    a safe folder name on any filesystem.
+    """
+    try:
+        while True:
+            name = input(
+                f"Name of the state / AOI (sub-folder of {parent}): "
+            ).strip()
+            if not name:
+                continue
+            safe = re.sub(r"[^\w\-]+", "_", name).strip("_")
+            if not safe:
+                print("  Name contains no usable characters. Try again.")
+                continue
+            return name, parent / safe
+    except (EOFError, KeyboardInterrupt):
+        sys.exit("\nAborted: no output folder provided.")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
-    scenes = sorted(INPUT_DIR.glob("S2*_MSIL1C_*.zip"))
-    if not scenes:
-        sys.exit(f"No Sentinel-2 L1C zip archives found in {INPUT_DIR.resolve()}")
+    state_name, output_dir = prompt_state_folder(TCI_PARENT_DIR)
 
-    print(f"Found {len(scenes)} scene(s) in {INPUT_DIR.resolve()}")
-    print(f"True-colour outputs -> {OUTPUT_DIR.resolve()}")
+    # rglob so we pick up scenes both at the root of ``Data/Sentinel/``
+    # (older layout) and inside an AOI sub-folder created by
+    # ``downloadSentinel2.py`` (e.g. ``Data/Sentinel/<state>/*.zip``).
+    scenes = sorted(INPUT_DIR.rglob("S2*_MSIL1C_*.zip"))
+    if not scenes:
+        sys.exit(
+            f"No Sentinel-2 L1C zip archives found under {INPUT_DIR.resolve()}"
+        )
+
+    print(f"\nFound {len(scenes)} scene(s) under {INPUT_DIR.resolve()}")
+    print(f"True-colour outputs ({state_name}) -> {output_dir.resolve()}")
     print(
         f"Stretch: reflectance [{REF_MIN:.2f}, {REF_MAX:.2f}] -> [0, 255], "
         f"gamma = {GAMMA:g}"
     )
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     for scene in tqdm(scenes, desc="TCI", unit="scene"):
         try:
-            process_scene(scene, OUTPUT_DIR)
+            process_scene(scene, output_dir)
         except Exception as exc:  # noqa: BLE001
             tqdm.write(f"  Failed on {scene.name}: {exc}")
 
