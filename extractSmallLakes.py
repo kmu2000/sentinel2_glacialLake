@@ -1,9 +1,16 @@
-"""Extract small lakes (area < ``MAX_LAKE_AREA_KM2``) from every NDWI
-raster produced by ``cloudMaskNDWI.py``, rejecting shadowed slopes
-using the Copernicus DEM mosaic in ``Data/DEM/``.
+"""Extract small lakes from every NDWI raster produced by
+``cloudMaskNDWI.py``, rejecting shadowed slopes using the Copernicus
+DEM mosaic in ``Data/DEM/``.
 
-For each ``DD-MM-YYYY_<TILE>_NDWI.tif`` in ``Data/Sentinel/NDWI/`` the
-script:
+At start-up the script prompts the user for:
+
+* the lower area bound (km^2) - anything smaller is treated as speckle;
+* the upper area bound (km^2) - the "small lakes only" ceiling;
+* the maximum mean slope (degrees) - any component whose average DEM
+  slope is at or above this threshold is discarded.
+
+Then, for each ``DD-MM-YYYY_<TILE>_NDWI.tif`` in
+``Data/Sentinel/NDWI/`` the script:
 
 1. Thresholds the raster with ``NDWI > NDWI_THRESHOLD`` to obtain a
    binary water mask (NaN pixels - cloud, cirrus, nodata - are treated
@@ -13,11 +20,11 @@ script:
 3. Reprojects the merged Copernicus DEM onto the scene's UTM grid,
    computes slope in degrees from central differences, and for every
    labelled component computes the mean slope over its pixels.
-4. Keeps only components whose contiguous area falls in
-   ``[MIN_LAKE_AREA_KM2, MAX_LAKE_AREA_KM2]`` (default 0.01 to 2 km^2)
-   AND whose mean slope is below ``SLOPE_MAX_DEG`` (default 10 deg).
-   The slope test rejects the terrain-shadow false positives that
-   would otherwise show up on steep, north-facing valley walls.
+4. Keeps only components whose contiguous area falls in the user's
+   ``[min_area_km2, max_area_km2]`` window AND whose mean slope is
+   below the user's ``slope_max_deg``. The slope test rejects the
+   terrain-shadow false positives that would otherwise show up on
+   steep, north-facing valley walls.
 5. Polygonises the retained components with
    :func:`rasterio.features.shapes` (8-connected) and writes each
    polygon as a feature with ``area_km2``, ``n_pixels``,
@@ -69,18 +76,13 @@ COMBINED_OUTPUT = OUTPUT_DIR / "all_small_lakes.gpkg"
 # positives from wet vegetation and shadow).
 NDWI_THRESHOLD = 0.20
 
-# Retain a polygon only if its area is in [MIN, MAX] km^2. MIN removes
-# single-pixel speckle; MAX is the "small lakes only" upper bound.
-MIN_LAKE_AREA_KM2 = 0.001   # ~10 pixels at 10 m
-MAX_LAKE_AREA_KM2 = 2.00   # user-requested upper bound
-PIXEL_AREA_M2 = 100.0      # Sentinel-2 output grid (10 m x 10 m)
-MIN_LAKE_PIXELS = int(round(MIN_LAKE_AREA_KM2 * 1_000_000.0 / PIXEL_AREA_M2))
-MAX_LAKE_PIXELS = int(round(MAX_LAKE_AREA_KM2 * 1_000_000.0 / PIXEL_AREA_M2))
+# Defaults used by prompt_thresholds() at start-up. The user can override
+# any of them interactively.
+DEFAULT_MIN_LAKE_AREA_KM2 = 0.001   # ~10 pixels at 10 m
+DEFAULT_MAX_LAKE_AREA_KM2 = 2.00
+DEFAULT_SLOPE_MAX_DEG = 20.0
 
-# Reject polygons whose mean terrain slope (from the Copernicus DEM)
-# is >= this value. Removes shadowed valley walls that spuriously look
-# water-like in NDWI. Set to a large number (e.g. 90.0) to disable.
-SLOPE_MAX_DEG = 20.0
+PIXEL_AREA_M2 = 100.0      # Sentinel-2 output grid (10 m x 10 m)
 
 # CRS of the combined output layer. WGS84 is the most portable choice
 # for a multi-tile dataset; set to None to keep the scene UTM CRS(s).
@@ -189,14 +191,19 @@ def mean_slope_per_label(
 def extract_small_lakes(
     ndwi_path: Path,
     output_dir: Path,
+    min_area_km2: float,
+    max_area_km2: float,
+    slope_max_deg: float,
     dem_memfile: MemoryFile | None = None,
 ) -> gpd.GeoDataFrame | None:
     """Extract polygons of small water bodies from a single NDWI GeoTIFF.
 
-    Returns the resulting GeoDataFrame (in the raster's native CRS) or
-    ``None`` if the scene name is not recognised or nothing survived
-    the size / slope filters. The GeoDataFrame is also written to a
-    per-scene GeoPackage inside ``output_dir``.
+    Only components whose area is in ``[min_area_km2, max_area_km2]`` km^2
+    AND whose mean terrain slope is below ``slope_max_deg`` degrees are
+    retained. Returns the resulting GeoDataFrame (in the raster's native
+    CRS) or ``None`` if the scene name is not recognised or nothing
+    survived the size / slope filters. The GeoDataFrame is also written
+    to a per-scene GeoPackage inside ``output_dir``.
     """
     match = NAME_REGEX.search(ndwi_path.name)
     if match is None:
@@ -206,6 +213,9 @@ def extract_small_lakes(
     date_uk = match.group("date")
     tile = match.group("tile")
     out_path = output_dir / f"{date_uk}_{tile}_smallLakes.gpkg"
+
+    min_pixels = int(round(min_area_km2 * 1_000_000.0 / PIXEL_AREA_M2))
+    max_pixels = int(round(max_area_km2 * 1_000_000.0 / PIXEL_AREA_M2))
 
     with rasterio.open(ndwi_path) as src:
         ndwi = src.read(1)
@@ -223,12 +233,12 @@ def extract_small_lakes(
     sizes = np.bincount(labels.ravel(), minlength=n_labels + 1)
     sizes[0] = 0  # label 0 is background
 
-    keep_size = (sizes >= MIN_LAKE_PIXELS) & (sizes <= MAX_LAKE_PIXELS)
+    keep_size = (sizes >= min_pixels) & (sizes <= max_pixels)
     keep_size[0] = False
     if not keep_size.any():
         tqdm.write(
             f"  {ndwi_path.name}: 0 lakes in "
-            f"{MIN_LAKE_AREA_KM2}-{MAX_LAKE_AREA_KM2} km^2 window "
+            f"{min_area_km2:g}-{max_area_km2:g} km^2 window "
             f"(largest component = {sizes.max() * PIXEL_AREA_M2 / 1e6:.3f} km^2)"
         )
         return None
@@ -245,7 +255,7 @@ def extract_small_lakes(
             slope_deg, dem_missing, labels, n_labels,
         )
         # NaN mean slope = no DEM coverage; reject conservatively.
-        keep_slope = np.isfinite(mean_slope) & (mean_slope < SLOPE_MAX_DEG)
+        keep_slope = np.isfinite(mean_slope) & (mean_slope < slope_max_deg)
     else:
         mean_slope = np.full(len(sizes), np.nan, dtype=np.float32)
         keep_slope = np.ones(len(sizes), dtype=bool)
@@ -256,7 +266,7 @@ def extract_small_lakes(
     if n_final == 0:
         tqdm.write(
             f"  {ndwi_path.name}: {n_size} lake(s) matched size filter but "
-            f"none had mean slope < {SLOPE_MAX_DEG:g} deg"
+            f"none had mean slope < {slope_max_deg:g} deg"
         )
         return None
 
@@ -299,7 +309,7 @@ def extract_small_lakes(
 
     dropped = n_size - n_final
     slope_note = (
-        f" ({dropped} dropped by slope>{SLOPE_MAX_DEG:g}deg)"
+        f" ({dropped} dropped by slope>{slope_max_deg:g}deg)"
         if dem_memfile is not None and dropped > 0
         else ""
     )
@@ -312,19 +322,84 @@ def extract_small_lakes(
 
 
 # ---------------------------------------------------------------------------
+# Interactive prompts
+# ---------------------------------------------------------------------------
+def _read_float(
+    prompt: str,
+    default: float,
+    min_value: float = 0.0,
+    max_value: float | None = None,
+) -> float:
+    """Prompt for a float; blank input returns ``default``."""
+    while True:
+        raw = input(f"{prompt} [{default:g}]: ").strip()
+        if not raw:
+            return default
+        try:
+            value = float(raw)
+        except ValueError:
+            print("  Please enter a number.")
+            continue
+        if value < min_value:
+            print(f"  Value must be >= {min_value:g}.")
+            continue
+        if max_value is not None and value > max_value:
+            print(f"  Value must be <= {max_value:g}.")
+            continue
+        return value
+
+
+def prompt_thresholds() -> tuple[float, float, float]:
+    """Ask the user for the lake-area bounds (km^2) and the maximum mean
+    slope (degrees). Press Enter at any prompt to keep the shown default.
+    """
+    print("Lake extraction thresholds (press Enter to accept the default):")
+    while True:
+        min_area = _read_float(
+            "  Minimum lake area (km^2)",
+            DEFAULT_MIN_LAKE_AREA_KM2,
+            min_value=0.0,
+        )
+        max_area = _read_float(
+            "  Maximum lake area (km^2)",
+            DEFAULT_MAX_LAKE_AREA_KM2,
+            min_value=0.0,
+        )
+        if max_area <= min_area:
+            print(
+                "  Maximum lake area must be greater than the minimum; "
+                "please re-enter both."
+            )
+            continue
+        break
+    slope_max = _read_float(
+        "  Maximum mean slope (degrees, 0-90)",
+        DEFAULT_SLOPE_MAX_DEG,
+        min_value=0.0,
+        max_value=90.0,
+    )
+    return min_area, max_area, slope_max
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
+    min_area_km2, max_area_km2, slope_max_deg = prompt_thresholds()
+
     ndwi_files = sorted(NDWI_DIR.glob("*_NDWI.tif"))
     if not ndwi_files:
         sys.exit(f"No NDWI rasters found in {NDWI_DIR.resolve()}")
 
-    print(f"Found {len(ndwi_files)} NDWI raster(s) in {NDWI_DIR.resolve()}")
+    min_pixels = int(round(min_area_km2 * 1_000_000.0 / PIXEL_AREA_M2))
+    max_pixels = int(round(max_area_km2 * 1_000_000.0 / PIXEL_AREA_M2))
+
+    print(f"\nFound {len(ndwi_files)} NDWI raster(s) in {NDWI_DIR.resolve()}")
     print(
         f"Water criterion: NDWI > {NDWI_THRESHOLD:g}, "
-        f"area in [{MIN_LAKE_AREA_KM2:g}, {MAX_LAKE_AREA_KM2:g}] km^2 "
-        f"({MIN_LAKE_PIXELS} - {MAX_LAKE_PIXELS} pixels @ 10 m), "
-        f"mean slope < {SLOPE_MAX_DEG:g} deg"
+        f"area in [{min_area_km2:g}, {max_area_km2:g}] km^2 "
+        f"({min_pixels} - {max_pixels} pixels @ 10 m), "
+        f"mean slope < {slope_max_deg:g} deg"
     )
     print(f"Per-scene outputs -> {OUTPUT_DIR.resolve()}")
 
@@ -333,10 +408,10 @@ def main() -> None:
     if dem_memfile is None:
         print(
             f"  No DEM tiles found in {DEM_DIR}; slope filter (< "
-            f"{SLOPE_MAX_DEG:g} deg) will be skipped."
+            f"{slope_max_deg:g} deg) will be skipped."
         )
     else:
-        print(f"  Slope filter active: keeping mean slope < {SLOPE_MAX_DEG:g} deg.")
+        print(f"  Slope filter active: keeping mean slope < {slope_max_deg:g} deg.")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -345,7 +420,12 @@ def main() -> None:
         for path in tqdm(ndwi_files, desc="Lakes", unit="scene"):
             try:
                 gdf = extract_small_lakes(
-                    path, OUTPUT_DIR, dem_memfile=dem_memfile,
+                    path,
+                    OUTPUT_DIR,
+                    min_area_km2=min_area_km2,
+                    max_area_km2=max_area_km2,
+                    slope_max_deg=slope_max_deg,
+                    dem_memfile=dem_memfile,
                 )
             except Exception as exc:  # noqa: BLE001
                 tqdm.write(f"  Failed on {path.name}: {exc}")
