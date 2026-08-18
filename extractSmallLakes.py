@@ -101,11 +101,17 @@ NAME_REGEX = re.compile(
 # DEM mosaic and slope
 # ---------------------------------------------------------------------------
 def load_dem_mosaic(dem_dir: Path) -> MemoryFile | None:
-    """Merge every ``*.tif`` DEM tile in ``dem_dir`` into an in-memory
-    raster. Returns ``None`` if the directory does not exist or is empty."""
+    """Merge every ``*.tif`` DEM tile below ``dem_dir`` into an in-memory
+    raster. Returns ``None`` if the directory does not exist or is empty.
+
+    Tiles are discovered recursively so both the legacy flat layout
+    (``Data/DEM/*.tif``) and the per-state layout written by the
+    updated ``downloadDEM.py`` (``Data/DEM/<state>/*.tif``) are picked
+    up.
+    """
     if not dem_dir.exists():
         return None
-    tif_paths = sorted(dem_dir.glob("*.tif"))
+    tif_paths = sorted(dem_dir.rglob("*.tif"))
     if not tif_paths:
         return None
 
@@ -387,14 +393,17 @@ def prompt_thresholds() -> tuple[float, float, float]:
 def main() -> None:
     min_area_km2, max_area_km2, slope_max_deg = prompt_thresholds()
 
-    ndwi_files = sorted(NDWI_DIR.glob("*_NDWI.tif"))
+    # rglob so we pick up NDWI rasters both directly under ``NDWI_DIR``
+    # (older flat layout) and inside state / AOI sub-folders written by
+    # the updated ``cloudMaskNDWI.py`` (``NDWI_DIR/<state>/*_NDWI.tif``).
+    ndwi_files = sorted(NDWI_DIR.rglob("*_NDWI.tif"))
     if not ndwi_files:
-        sys.exit(f"No NDWI rasters found in {NDWI_DIR.resolve()}")
+        sys.exit(f"No NDWI rasters found under {NDWI_DIR.resolve()}")
 
     min_pixels = int(round(min_area_km2 * 1_000_000.0 / PIXEL_AREA_M2))
     max_pixels = int(round(max_area_km2 * 1_000_000.0 / PIXEL_AREA_M2))
 
-    print(f"\nFound {len(ndwi_files)} NDWI raster(s) in {NDWI_DIR.resolve()}")
+    print(f"\nFound {len(ndwi_files)} NDWI raster(s) under {NDWI_DIR.resolve()}")
     print(
         f"Water criterion: NDWI > {NDWI_THRESHOLD:g}, "
         f"area in [{min_area_km2:g}, {max_area_km2:g}] km^2 "

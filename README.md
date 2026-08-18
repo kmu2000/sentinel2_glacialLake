@@ -17,10 +17,10 @@ so the outputs of one step are the inputs of the next.
 | Step | Script                | Reads from                          | Writes to                                    |
 |-----:|-----------------------|-------------------------------------|----------------------------------------------|
 | 1    | `downloadSentinel2.py`| CDSE catalogue                      | `../Data/Sentinel/<AOI>/*.zip`               |
-| 2    | `downloadDEM.py`      | AWS Copernicus DEM open data        | `../Data/DEM/*.tif`                          |
+| 2    | `downloadDEM.py`      | AWS Copernicus DEM open data        | `../Data/DEM/<state>/*.tif`                  |
 | 3    | `trueColour.py`       | `../Data/Sentinel/**/*.zip`         | `../Data/Sentinel/TCI/<state>/*.tif`         |
-| 4    | `cloudMaskNDWI.py`    | `../Data/Sentinel/**/*.zip`         | `../Data/Sentinel/NDWI/*.tif`                |
-| 5    | `extractSmallLakes.py`| `../Data/Sentinel/NDWI/`, `../Data/DEM/` | `../Data/Lakes/*.gpkg`, `all_small_lakes.gpkg` |
+| 4    | `cloudMaskNDWI.py`    | `../Data/Sentinel/**/*.zip`         | `../Data/Sentinel/NDWI/<state>/*.tif`        |
+| 5    | `extractSmallLakes.py`| `../Data/Sentinel/NDWI/**/*_NDWI.tif`, `../Data/DEM/**/*.tif` | `../Data/Lakes/*.gpkg`, `all_small_lakes.gpkg` |
 | 6    | `PGDL.py`             | glacier + reference-lake shapefiles, `../Data/Lakes/all_small_lakes.gpkg` | `../Himachal_Pradesh_lakes/*.gpkg` |
 
 ### What each script does
@@ -32,18 +32,24 @@ so the outputs of one step are the inputs of the next.
   minimum cover via greedy set-cover, reports coverage and cloud stats,
   and downloads any tiles not already on disk to
   `../Data/Sentinel/<AOI>/`.
-- **`downloadDEM.py`** &mdash; Downloads 30 m Copernicus DEM (GLO-30) tiles
-  covering the AOI from the AWS Open Data mirror into `../Data/DEM/`.
+- **`downloadDEM.py`** &mdash; Prompts for a state name, resolves the
+  state polygon from the GADM level-1 shapefile, and downloads every
+  30 m Copernicus DEM (GLO-30) tile that intersects the polygon into
+  `../Data/DEM/<state>/`. The prompt re-asks if the entered name is
+  not present in the shapefile.
 - **`trueColour.py`** &mdash; Prompts for the state / AOI name, then
   builds a stretched 8-bit RGB GeoTIFF (B04/B03/B02) per scene into
   `../Data/Sentinel/TCI/<state>/`. Scenes are discovered recursively
   under `../Data/Sentinel/`, so both the legacy flat layout and the AOI
   sub-folders created by `downloadSentinel2.py` are picked up.
-- **`cloudMaskNDWI.py`** &mdash; Reads B03 (Green) and B08 (NIR) from each
-  L1C zip, computes McFeeters NDWI, masks cloud + cirrus pixels using the
-  L1C `MSK_CLASSI` layer (writes NaN), and optionally reports
-  NDWI-in-lakes statistics against the Zhang et al. (2022) reference
-  polygons.
+- **`cloudMaskNDWI.py`** &mdash; Prompts for the state / AOI name, then
+  reads B03 (Green) and B08 (NIR) from each L1C zip, computes
+  McFeeters NDWI, masks cloud + cirrus pixels using the L1C
+  `MSK_CLASSI` layer (writes NaN), and writes the NDWI GeoTIFFs into
+  `../Data/Sentinel/NDWI/<state>/`. Scenes are discovered recursively
+  under `../Data/Sentinel/`, and NDWI-in-lakes statistics are reported
+  against the Zhang et al. (2022) reference polygons when the shapefile
+  is present.
 - **`extractSmallLakes.py`** &mdash; Prompts for the lower and upper
   lake-area bounds (km²) and the maximum mean terrain slope (degrees),
   then thresholds each NDWI raster, does 8-connected component
@@ -101,8 +107,8 @@ LakeMapping/
 ├── Data/                        (populated by the pipeline; user-owned)
 │   ├── Sentinel/<AOI>/*.zip     (populated by downloadSentinel2.py)
 │   ├── Sentinel/TCI/<state>/*.tif  (populated by trueColour.py)
-│   ├── Sentinel/NDWI/*.tif      (populated by cloudMaskNDWI.py)
-│   ├── DEM/*.tif                (populated by downloadDEM.py)
+│   ├── Sentinel/NDWI/<state>/*.tif (populated by cloudMaskNDWI.py)
+│   ├── DEM/<state>/*.tif        (populated by downloadDEM.py)
 │   └── Lakes/*.gpkg             (populated by extractSmallLakes.py)
 ├── GlacierInventory/
 │   └── 14_rgi60_SouthAsiaWest_India.shp
@@ -138,17 +144,24 @@ Run the scripts in order from the `script/` folder. Every step is
 idempotent &mdash; already-downloaded scenes, generated NDWI/TCI rasters,
 and extracted lakes are detected on disk and skipped.
 
-Three of the scripts are interactive:
+Five of the scripts are interactive:
 
 - `downloadSentinel2.py` prompts for an AOI name (used as the sub-folder
   under `../Data/Sentinel/`), the upper-left and lower-right
   longitude/latitude of the bounding box, and your Copernicus Data
   Space username + password.
+- `downloadDEM.py` prompts for a state name (looked up in the GADM
+  level-1 shapefile) and writes the DEM tiles into
+  `../Data/DEM/<state>/`.
 - `trueColour.py` prompts for a state / AOI name and writes the RGB
   GeoTIFFs into `../Data/Sentinel/TCI/<state>/`.
+- `cloudMaskNDWI.py` prompts for a state / AOI name and writes the NDWI
+  GeoTIFFs into `../Data/Sentinel/NDWI/<state>/`.
 - `extractSmallLakes.py` prompts for the minimum and maximum lake area
   (km²) and the maximum mean slope (degrees). Press Enter at any prompt
-  to accept the shown default.
+  to accept the shown default. Both the NDWI rasters and the DEM tiles
+  are picked up recursively from `../Data/Sentinel/NDWI/` and
+  `../Data/DEM/`, so any per-state sub-folder is used automatically.
 
 ```bash
 cd script/
@@ -156,13 +169,13 @@ cd script/
 # 1. Download Sentinel-2 tiles for your AOI  (interactive)
 python downloadSentinel2.py
 
-# 2. Download the matching Copernicus DEM tiles
+# 2. Download the matching Copernicus DEM tiles  (interactive)
 python downloadDEM.py
 
 # 3. (Optional) build RGB composites for visual QC  (interactive)
 python trueColour.py
 
-# 4. Compute cloud-masked NDWI rasters
+# 4. Compute cloud-masked NDWI rasters  (interactive)
 python cloudMaskNDWI.py
 
 # 5. Extract small lakes (with slope filter)  (interactive)
@@ -180,7 +193,8 @@ Each script keeps its knobs in a short config block near the top:
   `CLOUD_WARN_PCT`. (Bounding box, AOI name and credentials are asked
   for at runtime.)
 - `cloudMaskNDWI.py`: `LAKES_SHP` (Zhang polygons used for the
-  NDWI-in-lakes statistics).
+  NDWI-in-lakes statistics). The state / AOI sub-folder is asked for at
+  runtime.
 - `extractSmallLakes.py`: `NDWI_THRESHOLD` (default 0.20). The area
   window and slope cap are asked for at runtime with defaults
   `DEFAULT_MIN_LAKE_AREA_KM2` = 0.001 km², `DEFAULT_MAX_LAKE_AREA_KM2`

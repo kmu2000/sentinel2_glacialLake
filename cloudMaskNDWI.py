@@ -1,6 +1,10 @@
 """Compute cloud-masked NDWI rasters for every Sentinel-2 L1C scene
-stored in ``Data/Sentinel/`` and report NDWI statistics for pixels
-falling inside the Zhang et al. (2022) Himalayan glacial-lake polygons.
+below ``Data/Sentinel/`` and report NDWI statistics for pixels falling
+inside the Zhang et al. (2022) Himalayan glacial-lake polygons.
+
+At start-up the script prompts for the state / AOI name; the resulting
+NDWI GeoTIFFs are written into ``Data/Sentinel/NDWI/<state>/`` (the
+state name is sanitised so it is always a safe folder name).
 
 For each ``S2X_MSIL1C_*.zip`` archive the script:
 
@@ -22,8 +26,9 @@ For each ``S2X_MSIL1C_*.zip`` archive the script:
 
 Outputs
 -------
-* ``Data/Sentinel/NDWI/DD-MM-YYYY_<TILE>_NDWI.tif`` - Float32 NDWI with
-  NaN wherever the pixel is nodata or flagged as cloud / cirrus.
+* ``Data/Sentinel/NDWI/<state>/DD-MM-YYYY_<TILE>_NDWI.tif`` - Float32
+  NDWI with NaN wherever the pixel is nodata or flagged as cloud /
+  cirrus.
 * Per-scene and overall NDWI-inside-lake statistics printed to stdout.
 
 Requirements::
@@ -54,7 +59,10 @@ from tqdm import tqdm
 # Configuration
 # ---------------------------------------------------------------------------
 INPUT_DIR = Path("../Data/Sentinel")
-NDWI_DIR = INPUT_DIR / "NDWI"
+# NDWI GeoTIFFs are written under ``NDWI_PARENT_DIR / <state>/`` where
+# ``<state>`` is the sanitised name entered at start-up (see
+# ``prompt_state_folder`` below).
+NDWI_PARENT_DIR = INPUT_DIR / "NDWI"
 
 # Reference glacial-lake polygons (Zhang et al., 2022, Himalayan region).
 # The stats block is skipped silently if this file is not present.
@@ -357,15 +365,49 @@ def process_scene(
 
 
 # ---------------------------------------------------------------------------
+# Interactive prompt
+# ---------------------------------------------------------------------------
+def prompt_state_folder(parent: Path) -> tuple[str, Path]:
+    """Prompt for the state / AOI name; return ``(display_name, output_dir)``.
+
+    ``display_name`` is the raw user input (used in printed messages).
+    ``output_dir`` is ``parent / <sanitised name>`` where the name is
+    sanitised to keep only ``[A-Za-z0-9_-]`` characters so it is always
+    a safe folder name on any filesystem.
+    """
+    try:
+        while True:
+            name = input(
+                f"Name of the state / AOI (sub-folder of {parent}): "
+            ).strip()
+            if not name:
+                continue
+            safe = re.sub(r"[^\w\-]+", "_", name).strip("_")
+            if not safe:
+                print("  Name contains no usable characters. Try again.")
+                continue
+            return name, parent / safe
+    except (EOFError, KeyboardInterrupt):
+        sys.exit("\nAborted: no output folder provided.")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
-    scenes = sorted(INPUT_DIR.glob("S2*_MSIL1C_*.zip"))
-    if not scenes:
-        sys.exit(f"No Sentinel-2 L1C zip archives found in {INPUT_DIR.resolve()}")
+    state_name, output_dir = prompt_state_folder(NDWI_PARENT_DIR)
 
-    print(f"Found {len(scenes)} scene(s) in {INPUT_DIR.resolve()}")
-    print(f"NDWI outputs -> {NDWI_DIR.resolve()}")
+    # rglob so we pick up scenes both at the root of ``Data/Sentinel/``
+    # (older layout) and inside an AOI sub-folder created by
+    # ``downloadSentinel2.py`` (e.g. ``Data/Sentinel/<state>/*.zip``).
+    scenes = sorted(INPUT_DIR.rglob("S2*_MSIL1C_*.zip"))
+    if not scenes:
+        sys.exit(
+            f"No Sentinel-2 L1C zip archives found under {INPUT_DIR.resolve()}"
+        )
+
+    print(f"\nFound {len(scenes)} scene(s) under {INPUT_DIR.resolve()}")
+    print(f"NDWI outputs ({state_name}) -> {output_dir.resolve()}")
 
     lakes = load_lake_polygons(LAKES_SHP)
     if lakes is None:
@@ -379,11 +421,11 @@ def main() -> None:
             f"(source CRS: {lakes.crs})"
         )
 
-    NDWI_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     all_lake_values: list[np.ndarray] = []
     for scene in tqdm(scenes, desc="NDWI", unit="scene"):
         try:
-            _path, lake_values = process_scene(scene, NDWI_DIR, lakes=lakes)
+            _path, lake_values = process_scene(scene, output_dir, lakes=lakes)
             if lake_values.size:
                 all_lake_values.append(lake_values)
         except Exception as exc:  # noqa: BLE001

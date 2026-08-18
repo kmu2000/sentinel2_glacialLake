@@ -1,20 +1,28 @@
-"""Download the 30 m Copernicus DEM (GLO-30) tiles covering the state of
-Himachal Pradesh (India).
+"""Download the 30 m Copernicus DEM (GLO-30) tiles covering a
+user-supplied Indian state.
 
-The state boundary is read from the GADM level-1 shapefile. Every 1-degree
-Copernicus DEM tile whose footprint intersects the state polygon is
-downloaded from the public AWS Open Data mirror:
+At start-up the script prompts for the state / AOI name. That name is
+used both to look up the state polygon in the GADM level-1 shapefile
+and (in sanitised form) as the destination sub-folder under
+``Data/DEM/``. Every 1-degree Copernicus DEM tile whose footprint
+intersects the state polygon is downloaded from the public AWS Open
+Data mirror:
 
     https://copernicus-dem-30m.s3.eu-central-1.amazonaws.com/
 
 No authentication is required.
 
+Outputs
+-------
+* ``Data/DEM/<state>/Copernicus_DSM_COG_10_*_DEM.tif`` - one Cloud
+  Optimised GeoTIFF per 1-degree tile, in geographic coordinates
+  (EPSG:4326) with a nominal ground sampling of ~30 m at the equator.
+
 Notes
 -----
 Copernicus DEM GLO-30 is derived from TanDEM-X and is distinct from the
-NASA/USGS SRTM product (despite this script's filename). Each downloaded
-tile is a Cloud-Optimised GeoTIFF in geographic coordinates (EPSG:4326)
-with a nominal ground sampling of ~30 m at the equator.
+NASA/USGS SRTM product. Ocean-only 1-degree cells are not published on
+the AWS mirror and are silently skipped (HTTP 404).
 
 Requirements::
 
@@ -24,6 +32,7 @@ Requirements::
 from __future__ import annotations
 
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -39,8 +48,10 @@ from tqdm import tqdm
 # Configuration
 # ---------------------------------------------------------------------------
 SHAPEFILE = Path("../Data/gadm41_IND_shp/gadm41_IND_1.shp")
-STATE_NAME = "Himachal Pradesh"
-OUTPUT_DIR = Path("../Data/DEM")
+# Per-run tiles are written under ``OUTPUT_PARENT_DIR / <state>/`` where
+# ``<state>`` is the sanitised name entered at start-up (see
+# ``prompt_state`` below).
+OUTPUT_PARENT_DIR = Path("../Data/DEM")
 
 # Regional endpoint avoids the extra redirect through the global one.
 BUCKET_URL = "https://copernicus-dem-30m.s3.eu-central-1.amazonaws.com"
@@ -134,28 +145,68 @@ def download_tile(url: str, destination: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Interactive prompt
+# ---------------------------------------------------------------------------
+def prompt_state(
+    shapefile: Path, output_parent: Path
+) -> tuple[str, BaseGeometry, Path]:
+    """Prompt for a state / AOI name; return ``(display_name, geometry,
+    output_dir)``.
+
+    ``display_name`` is the raw user input (used both to look up the
+    state polygon in ``shapefile`` and in printed messages).
+    ``output_dir`` is ``output_parent / <sanitised name>`` where the
+    name is sanitised to keep only ``[A-Za-z0-9_-]`` characters so it
+    is always a safe folder name on any filesystem. The loop re-asks
+    if the entered name cannot be matched in the shapefile.
+    """
+    try:
+        while True:
+            name = input(
+                f"Name of the state / AOI (sub-folder of {output_parent}): "
+            ).strip()
+            if not name:
+                continue
+            safe = re.sub(r"[^\w\-]+", "_", name).strip("_")
+            if not safe:
+                print("  Name contains no usable characters. Try again.")
+                continue
+            try:
+                geometry = load_state_geometry(shapefile, name)
+            except ValueError as exc:
+                print(f"  {exc}")
+                continue
+            return name, geometry, output_parent / safe
+    except (EOFError, KeyboardInterrupt):
+        sys.exit("\nAborted: no state provided.")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
-    print(f"Reading area of interest for {STATE_NAME} ...")
-    aoi = load_state_geometry(SHAPEFILE, STATE_NAME)
+    state_name, aoi, output_dir = prompt_state(SHAPEFILE, OUTPUT_PARENT_DIR)
     minx, miny, maxx, maxy = aoi.bounds
+    print(f"\nArea of interest: {state_name}")
     print(
         f"  Bounding box: {miny:.2f}-{maxy:.2f} N, {minx:.2f}-{maxx:.2f} E"
     )
 
     tiles = tiles_intersecting(aoi)
     if not tiles:
-        sys.exit("No Copernicus DEM tiles intersect the requested state.")
+        sys.exit(
+            f"No Copernicus DEM tiles intersect the requested state "
+            f"({state_name})."
+        )
     print(f"  {len(tiles)} 1-degree tile(s) to download:")
     for lat, lon in tiles:
         print(f"    {tile_stem(lat, lon)}")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"\nDownloading to {OUTPUT_DIR.resolve()} ...")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\nDownloading to {output_dir.resolve()} ...")
     for lat, lon in tqdm(tiles, desc="DEM tiles", unit="tile"):
         stem = tile_stem(lat, lon)
-        destination = OUTPUT_DIR / f"{stem}.tif"
+        destination = output_dir / f"{stem}.tif"
         try:
             download_tile(tile_url(lat, lon), destination)
         except requests.HTTPError as exc:
