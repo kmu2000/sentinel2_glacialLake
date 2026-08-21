@@ -4,12 +4,14 @@ DEM mosaic in ``Data/DEM/``.
 
 At start-up the script prompts the user for:
 
+* the state / AOI name - used (in sanitised form) as the destination
+  sub-folder under ``Data/Lakes/``;
 * the lower area bound (km^2) - anything smaller is treated as speckle;
 * the upper area bound (km^2) - the "small lakes only" ceiling;
 * the maximum mean slope (degrees) - any component whose average DEM
   slope is at or above this threshold is discarded.
 
-Then, for each ``DD-MM-YYYY_<TILE>_NDWI.tif`` in
+Then, for each ``DD-MM-YYYY_<TILE>_NDWI.tif`` found recursively under
 ``Data/Sentinel/NDWI/`` the script:
 
 1. Thresholds the raster with ``NDWI > NDWI_THRESHOLD`` to obtain a
@@ -32,10 +34,11 @@ Then, for each ``DD-MM-YYYY_<TILE>_NDWI.tif`` in
 
 Outputs
 -------
-* ``Data/Lakes/DD-MM-YYYY_<TILE>_smallLakes.gpkg`` - one GeoPackage per
-  scene, in the scene's native UTM CRS.
-* ``Data/Lakes/all_small_lakes.gpkg`` - all polygons across all scenes
-  reprojected to EPSG:4326 for easy overlay / QGIS visualisation.
+* ``Data/Lakes/<state>/DD-MM-YYYY_<TILE>_smallLakes.gpkg`` - one
+  GeoPackage per scene, in the scene's native UTM CRS.
+* ``Data/Lakes/<state>/all_small_lakes.gpkg`` - all polygons across
+  all scenes reprojected to EPSG:4326 for easy overlay / QGIS
+  visualisation.
 
 Requirements::
 
@@ -67,8 +70,11 @@ from tqdm import tqdm
 # ---------------------------------------------------------------------------
 NDWI_DIR = Path("../Data/Sentinel/NDWI")
 DEM_DIR = Path("../Data/DEM")
-OUTPUT_DIR = Path("../Data/Lakes")
-COMBINED_OUTPUT = OUTPUT_DIR / "all_small_lakes.gpkg"
+# Per-run outputs live in ``OUTPUT_PARENT_DIR / <state>/`` where
+# ``<state>`` is the sanitised name entered at start-up (see
+# ``prompt_state_folder`` below).
+OUTPUT_PARENT_DIR = Path("../Data/Lakes")
+COMBINED_OUTPUT_NAME = "all_small_lakes.gpkg"
 
 # NDWI > NDWI_THRESHOLD is treated as water. 0.20 is McFeeters'
 # canonical value; drop it to ~0.05 to also capture partially
@@ -355,6 +361,30 @@ def _read_float(
         return value
 
 
+def prompt_state_folder(parent: Path) -> tuple[str, Path]:
+    """Prompt for the state / AOI name; return ``(display_name, output_dir)``.
+
+    ``display_name`` is the raw user input (used in printed messages).
+    ``output_dir`` is ``parent / <sanitised name>`` where the name is
+    sanitised to keep only ``[A-Za-z0-9_-]`` characters so it is always
+    a safe folder name on any filesystem.
+    """
+    try:
+        while True:
+            name = input(
+                f"Name of the state / AOI (sub-folder of {parent}): "
+            ).strip()
+            if not name:
+                continue
+            safe = re.sub(r"[^\w\-]+", "_", name).strip("_")
+            if not safe:
+                print("  Name contains no usable characters. Try again.")
+                continue
+            return name, parent / safe
+    except (EOFError, KeyboardInterrupt):
+        sys.exit("\nAborted: no output folder provided.")
+
+
 def prompt_thresholds() -> tuple[float, float, float]:
     """Ask the user for the lake-area bounds (km^2) and the maximum mean
     slope (degrees). Press Enter at any prompt to keep the shown default.
@@ -391,6 +421,7 @@ def prompt_thresholds() -> tuple[float, float, float]:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
+    state_name, output_dir = prompt_state_folder(OUTPUT_PARENT_DIR)
     min_area_km2, max_area_km2, slope_max_deg = prompt_thresholds()
 
     # rglob so we pick up NDWI rasters both directly under ``NDWI_DIR``
@@ -403,6 +434,8 @@ def main() -> None:
     min_pixels = int(round(min_area_km2 * 1_000_000.0 / PIXEL_AREA_M2))
     max_pixels = int(round(max_area_km2 * 1_000_000.0 / PIXEL_AREA_M2))
 
+    combined_output = output_dir / COMBINED_OUTPUT_NAME
+
     print(f"\nFound {len(ndwi_files)} NDWI raster(s) under {NDWI_DIR.resolve()}")
     print(
         f"Water criterion: NDWI > {NDWI_THRESHOLD:g}, "
@@ -410,7 +443,7 @@ def main() -> None:
         f"({min_pixels} - {max_pixels} pixels @ 10 m), "
         f"mean slope < {slope_max_deg:g} deg"
     )
-    print(f"Per-scene outputs -> {OUTPUT_DIR.resolve()}")
+    print(f"Outputs ({state_name}) -> {output_dir.resolve()}")
 
     print(f"Loading DEM tiles from {DEM_DIR.resolve()} ...")
     dem_memfile = load_dem_mosaic(DEM_DIR)
@@ -422,7 +455,7 @@ def main() -> None:
     else:
         print(f"  Slope filter active: keeping mean slope < {slope_max_deg:g} deg.")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     per_scene: list[gpd.GeoDataFrame] = []
     try:
@@ -430,7 +463,7 @@ def main() -> None:
             try:
                 gdf = extract_small_lakes(
                     path,
-                    OUTPUT_DIR,
+                    output_dir,
                     min_area_km2=min_area_km2,
                     max_area_km2=max_area_km2,
                     slope_max_deg=slope_max_deg,
@@ -457,11 +490,11 @@ def main() -> None:
         pd.concat(reprojected, ignore_index=True),
         crs=reprojected[0].crs,
     )
-    combined.to_file(COMBINED_OUTPUT, driver="GPKG", layer="small_lakes")
+    combined.to_file(combined_output, driver="GPKG", layer="small_lakes")
 
     print(
         f"\nCombined {len(combined):,} lake polygons across "
-        f"{len(per_scene)} scene(s) -> {COMBINED_OUTPUT.resolve()}"
+        f"{len(per_scene)} scene(s) -> {combined_output.resolve()}"
     )
     print(
         f"  Area: min={combined['area_km2'].min():.3f}  "

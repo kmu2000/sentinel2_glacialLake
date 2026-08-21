@@ -20,8 +20,8 @@ so the outputs of one step are the inputs of the next.
 | 2    | `downloadDEM.py`      | AWS Copernicus DEM open data        | `../Data/DEM/<state>/*.tif`                  |
 | 3    | `trueColour.py`       | `../Data/Sentinel/**/*.zip`         | `../Data/Sentinel/TCI/<state>/*.tif`         |
 | 4    | `cloudMaskNDWI.py`    | `../Data/Sentinel/**/*.zip`         | `../Data/Sentinel/NDWI/<state>/*.tif`        |
-| 5    | `extractSmallLakes.py`| `../Data/Sentinel/NDWI/**/*_NDWI.tif`, `../Data/DEM/**/*.tif` | `../Data/Lakes/*.gpkg`, `all_small_lakes.gpkg` |
-| 6    | `PGDL.py`             | glacier + reference-lake shapefiles, `../Data/Lakes/all_small_lakes.gpkg` | `../Himachal_Pradesh_lakes/*.gpkg` |
+| 5    | `extractSmallLakes.py`| `../Data/Sentinel/NDWI/**/*_NDWI.tif`, `../Data/DEM/**/*.tif` | `../Data/Lakes/<state>/*.gpkg`, `../Data/Lakes/<state>/all_small_lakes.gpkg` |
+| 6    | `PGDL.py`             | glacier + reference-lake shapefiles, `../Data/Lakes/<state>/all_small_lakes.gpkg` | `../Himachal_Pradesh_lakes/*.gpkg` |
 
 ### What each script does
 
@@ -50,14 +50,15 @@ so the outputs of one step are the inputs of the next.
   under `../Data/Sentinel/`, and NDWI-in-lakes statistics are reported
   against the Zhang et al. (2022) reference polygons when the shapefile
   is present.
-- **`extractSmallLakes.py`** &mdash; Prompts for the lower and upper
-  lake-area bounds (km²) and the maximum mean terrain slope (degrees),
-  then thresholds each NDWI raster, does 8-connected component
-  labelling, filters components by that area window and by mean slope
-  computed from the Copernicus DEM, polygonises the survivors, and
-  writes per-scene GeoPackages plus a combined `all_small_lakes.gpkg`
-  in EPSG:4326. Defaults are `[0.001, 2.0] km²` and `< 20°`; press
-  Enter at any prompt to keep the default.
+- **`extractSmallLakes.py`** &mdash; Prompts for the state / AOI name,
+  the lower and upper lake-area bounds (km²) and the maximum mean
+  terrain slope (degrees), then thresholds each NDWI raster, does
+  8-connected component labelling, filters components by that area
+  window and by mean slope computed from the Copernicus DEM,
+  polygonises the survivors, and writes per-scene GeoPackages plus a
+  combined `all_small_lakes.gpkg` (EPSG:4326) into
+  `../Data/Lakes/<state>/`. Defaults are `[0.001, 2.0] km²` and
+  `< 20°`; press Enter at any prompt to keep the default.
 - **`PGDL.py`** &mdash; Restricts the RGI glacier inventory, the Zhang
   reference lakes, and the computed lakes to a chosen state polygon, and
   further filters the computed lakes to those within 10 km of any
@@ -109,7 +110,7 @@ LakeMapping/
 │   ├── Sentinel/TCI/<state>/*.tif  (populated by trueColour.py)
 │   ├── Sentinel/NDWI/<state>/*.tif (populated by cloudMaskNDWI.py)
 │   ├── DEM/<state>/*.tif        (populated by downloadDEM.py)
-│   └── Lakes/*.gpkg             (populated by extractSmallLakes.py)
+│   └── Lakes/<state>/*.gpkg     (populated by extractSmallLakes.py)
 ├── GlacierInventory/
 │   └── 14_rgi60_SouthAsiaWest_India.shp
 └── Himachal_Pradesh_lakes/      (populated by PGDL.py)
@@ -134,7 +135,7 @@ imagery) or produced by the pipeline.
 - GADM administrative boundaries: <https://gadm.org/download_country.html>
 - RGI 6.0 glacier outlines: <https://www.glims.org/RGI/rgi60_dl.html>
   (this project uses region `14_rgi60_SouthAsiaWest`).
-- Zhang et al. (2022) Himalayan glacial-lake inventory: [Zenodo record](https://doi.org/10.5281/zenodo.5808110).
+- Zhang et al. (2022) Himalayan glacial-lake inventory.
 - Sentinel-2: [Copernicus Data Space](https://dataspace.copernicus.eu/).
 - Copernicus DEM (GLO-30): [AWS Open Data](https://registry.opendata.aws/copernicus-dem/).
 
@@ -157,11 +158,13 @@ Five of the scripts are interactive:
   GeoTIFFs into `../Data/Sentinel/TCI/<state>/`.
 - `cloudMaskNDWI.py` prompts for a state / AOI name and writes the NDWI
   GeoTIFFs into `../Data/Sentinel/NDWI/<state>/`.
-- `extractSmallLakes.py` prompts for the minimum and maximum lake area
-  (km²) and the maximum mean slope (degrees). Press Enter at any prompt
-  to accept the shown default. Both the NDWI rasters and the DEM tiles
-  are picked up recursively from `../Data/Sentinel/NDWI/` and
-  `../Data/DEM/`, so any per-state sub-folder is used automatically.
+- `extractSmallLakes.py` prompts for the state / AOI name, then the
+  minimum and maximum lake area (km²) and the maximum mean slope
+  (degrees). Press Enter at any prompt to accept the shown default.
+  Outputs are written to `../Data/Lakes/<state>/`. Both the NDWI
+  rasters and the DEM tiles are picked up recursively from
+  `../Data/Sentinel/NDWI/` and `../Data/DEM/`, so any per-state
+  sub-folder is used automatically.
 
 ```bash
 cd script/
@@ -195,11 +198,12 @@ Each script keeps its knobs in a short config block near the top:
 - `cloudMaskNDWI.py`: `LAKES_SHP` (Zhang polygons used for the
   NDWI-in-lakes statistics). The state / AOI sub-folder is asked for at
   runtime.
-- `extractSmallLakes.py`: `NDWI_THRESHOLD` (default 0.20). The area
-  window and slope cap are asked for at runtime with defaults
-  `DEFAULT_MIN_LAKE_AREA_KM2` = 0.001 km², `DEFAULT_MAX_LAKE_AREA_KM2`
-  = 2.0 km² and `DEFAULT_SLOPE_MAX_DEG` = 20°; edit those constants to
-  change what pressing Enter accepts.
+- `extractSmallLakes.py`: `NDWI_THRESHOLD` (default 0.20) and
+  `COMBINED_OUTPUT_NAME` (default `all_small_lakes.gpkg`). The state /
+  AOI sub-folder, area window and slope cap are asked for at runtime
+  with defaults `DEFAULT_MIN_LAKE_AREA_KM2` = 0.001 km²,
+  `DEFAULT_MAX_LAKE_AREA_KM2` = 2.0 km² and `DEFAULT_SLOPE_MAX_DEG`
+  = 20°; edit those constants to change what pressing Enter accepts.
 - `trueColour.py`: `REF_MIN`, `REF_MAX`, `GAMMA` for the display stretch.
   (The state / AOI sub-folder is asked for at runtime.)
 
